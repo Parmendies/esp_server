@@ -1,11 +1,14 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:vibration/vibration.dart';
 import 'package:http/http.dart' as http;
+import 'package:image/image.dart' as img;
 import '../config/telegram_config.dart';
+import 'preferences_service.dart';
 
 @pragma('vm:entry-point')
 void startCallback() {
@@ -131,18 +134,42 @@ class ServerTaskHandler extends TaskHandler {
       await imagesDir.create(recursive: true);
     }
 
-    final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
-    final filePath = '${imagesDir.path}/image_$timestamp.jpg';
-    final file = File(filePath);
-    await file.writeAsBytes(imageData);
+    // Resmi decode et (List<int>'i Uint8List'e dönüştür)
+    final uint8ImageData = Uint8List.fromList(imageData);
+    final image = img.decodeImage(uint8ImageData);
 
-    return filePath;
+    if (image != null) {
+      // Resmi yatay olarak yansıt (mirror)
+      final flippedImage = img.flipHorizontal(image);
+
+      // Yansıtılmış resmi encode et
+      final flippedImageData = img.encodeJpg(flippedImage);
+
+      final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
+      final filePath = '${imagesDir.path}/image_$timestamp.jpg';
+      final file = File(filePath);
+      await file.writeAsBytes(flippedImageData);
+
+      return filePath;
+    } else {
+      // Eğer decode edilemezse, orijinal veriyi kaydet
+      final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
+      final filePath = '${imagesDir.path}/image_$timestamp.jpg';
+      final file = File(filePath);
+      await file.writeAsBytes(imageData);
+
+      return filePath;
+    }
   }
 
   // ✅ Telegram'a resim gönderme fonksiyonu
   Future<void> _sendToTelegram(String filePath, int fileSize) async {
+    // Chat ID'yi SharedPreferences'ten yükle
+    final prefs = PreferencesService();
+    final telegramChatId = await prefs.getTelegramChatId();
+
     // Chat ID kontrolü
-    if (TELEGRAM_CHAT_ID.isEmpty) {
+    if (telegramChatId.isEmpty) {
       print('❌ Telegram Chat ID boş! Ayarlardan giriniz.');
       return;
     }
@@ -159,7 +186,7 @@ class ServerTaskHandler extends TaskHandler {
       );
 
       final request = http.MultipartRequest('POST', url)
-        ..fields['chat_id'] = TELEGRAM_CHAT_ID
+        ..fields['chat_id'] = telegramChatId
         ..fields['caption'] =
             '📸 ESP32 Kamera\n⏰ ${DateTime.now()}\n📦 ${(fileSize / 1024).toStringAsFixed(1)} KB'
         ..files.add(await http.MultipartFile.fromPath('photo', filePath));

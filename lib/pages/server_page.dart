@@ -5,7 +5,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:network_info_plus/network_info_plus.dart';
-import '../config/telegram_config.dart';
+import '../services/preferences_service.dart';
 import '../services/server_task_handler.dart';
 import '../widgets/info_card.dart';
 import 'images_page.dart';
@@ -26,6 +26,8 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
   Timer? _refreshTimer;
   late AnimationController _pulseController;
   final TextEditingController _chatIdController = TextEditingController();
+  String _telegramChatId = ''; // State variable for Telegram Chat ID
+  final PreferencesService _prefs = PreferencesService();
 
   @override
   void initState() {
@@ -57,15 +59,26 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
   }
 
   Future<void> _loadTelegramChatId() async {
-    // Basit bir saklama mekanizması (SharedPreferences kullanabilirsiniz)
-    _chatIdController.text = TELEGRAM_CHAT_ID;
+    final chatId = await _prefs.getTelegramChatId();
+    if (mounted) {
+      setState(() {
+        _telegramChatId = chatId;
+        _chatIdController.text = chatId;
+      });
+    }
   }
 
-  void _saveTelegramChatId() {
-    TELEGRAM_CHAT_ID = _chatIdController.text.trim();
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('Telegram Chat ID kaydedildi')));
+  Future<void> _saveTelegramChatId() async {
+    final chatId = _chatIdController.text.trim();
+    await _prefs.saveTelegramChatId(chatId);
+    if (mounted) {
+      setState(() {
+        _telegramChatId = chatId;
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Telegram Chat ID kaydedildi')));
+    }
   }
 
   Future<void> _loadImageCount() async {
@@ -210,7 +223,7 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
   }
 
   Future<void> _startServer() async {
-    if (TELEGRAM_CHAT_ID.isEmpty) {
+    if (_telegramChatId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('⚠️ Telegram Chat ID girilmedi!'),
@@ -327,7 +340,7 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
                   // Telegram Status Card
                   Card(
                     elevation: 0,
-                    color: TELEGRAM_CHAT_ID.isNotEmpty
+                    color: _telegramChatId.isNotEmpty
                         ? Colors.blue.withOpacity(0.1)
                         : Colors.orange.withOpacity(0.1),
                     child: Padding(
@@ -336,7 +349,7 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
                         children: [
                           Icon(
                             Icons.telegram,
-                            color: TELEGRAM_CHAT_ID.isNotEmpty
+                            color: _telegramChatId.isNotEmpty
                                 ? Colors.blue
                                 : Colors.orange,
                             size: 32,
@@ -347,7 +360,7 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  TELEGRAM_CHAT_ID.isNotEmpty
+                                  _telegramChatId.isNotEmpty
                                       ? 'Telegram Bağlı'
                                       : 'Telegram Bağlı Değil',
                                   style: TextStyle(
@@ -356,8 +369,8 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
                                   ),
                                 ),
                                 Text(
-                                  TELEGRAM_CHAT_ID.isNotEmpty
-                                      ? 'Chat ID: $TELEGRAM_CHAT_ID'
+                                  _telegramChatId.isNotEmpty
+                                      ? 'Chat ID: $_telegramChatId'
                                       : 'Ayarlardan Chat ID girin',
                                   style: TextStyle(fontSize: 12),
                                 ),
