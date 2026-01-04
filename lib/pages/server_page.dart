@@ -259,6 +259,34 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
     });
   }
 
+  Future<void> _refreshAll() async {
+    // Reload all operations
+    await Future.wait([
+      _getIpAddress(),
+      _loadImageCount(),
+      _loadLatestImage(),
+      _loadTelegramChatId(),
+      _checkServiceStatus(),
+    ]);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.refresh, color: Colors.white),
+              SizedBox(width: 12),
+              Text('Tüm bilgiler yenilendi!'),
+            ],
+          ),
+          backgroundColor: Colors.blue,
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -267,6 +295,11 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
           SliverAppBar.large(
             title: Text('ESP32 Kamera'),
             actions: [
+              IconButton(
+                icon: Icon(Icons.refresh),
+                tooltip: 'Yenile',
+                onPressed: _refreshAll,
+              ),
               IconButton(
                 icon: Icon(Icons.settings),
                 onPressed: () {
