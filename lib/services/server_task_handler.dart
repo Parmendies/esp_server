@@ -164,8 +164,18 @@ class ServerTaskHandler extends TaskHandler {
 
   // ✅ Telegram'a resim gönderme fonksiyonu
   Future<void> _sendToTelegram(String filePath, int fileSize) async {
-    // Chat ID'yi SharedPreferences'ten yükle
+    // Telegram enabled kontrolü
     final prefs = PreferencesService();
+    final isTelegramEnabled = await prefs.getTelegramEnabled();
+
+    if (!isTelegramEnabled) {
+      print(
+        'ℹ️ Telegram gönderimi devre dışı, resim sadece yerel olarak kaydedildi.',
+      );
+      return;
+    }
+
+    // Chat ID'yi SharedPreferences'ten yükle
     final telegramChatId = await prefs.getTelegramChatId();
 
     // Chat ID kontrolü

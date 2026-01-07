@@ -9,6 +9,7 @@ import '../services/preferences_service.dart';
 import '../services/server_task_handler.dart';
 import '../widgets/info_card.dart';
 import 'images_page.dart';
+import 'live_image_page.dart';
 
 class ServerPage extends StatefulWidget {
   const ServerPage({super.key});
@@ -22,11 +23,11 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
   String _ipAddress = 'Alınıyor...';
   int _receivedImages = 0;
   int _currentProgress = 0;
-  String _lastImagePath = '';
   Timer? _refreshTimer;
   late AnimationController _pulseController;
   final TextEditingController _chatIdController = TextEditingController();
   String _telegramChatId = ''; // State variable for Telegram Chat ID
+  bool _isTelegramEnabled = true; // State variable for Telegram toggle
   final PreferencesService _prefs = PreferencesService();
 
   @override
@@ -37,8 +38,9 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
     _requestPermissions();
     _checkServiceStatus();
     _loadImageCount();
-    _loadLatestImage();
     _loadTelegramChatId();
+    _loadTelegramEnabled();
+    _loadServerState();
 
     _pulseController = AnimationController(
       vsync: this,
@@ -65,6 +67,34 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
         _telegramChatId = chatId;
         _chatIdController.text = chatId;
       });
+    }
+  }
+
+  Future<void> _loadTelegramEnabled() async {
+    final enabled = await _prefs.getTelegramEnabled();
+    if (mounted) {
+      setState(() {
+        _isTelegramEnabled = enabled;
+      });
+    }
+  }
+
+  Future<void> _loadServerState() async {
+    final isRunning = await _prefs.getServerRunning();
+    final actuallyRunning = await FlutterForegroundTask.isRunningService;
+
+    // Sync the state - if service says it's running, trust that
+    final correctState = actuallyRunning || isRunning;
+
+    if (mounted) {
+      setState(() {
+        _isServerRunning = correctState;
+      });
+    }
+
+    // Update stored state to match reality
+    if (correctState != isRunning) {
+      await _prefs.saveServerRunning(correctState);
     }
   }
 
@@ -96,35 +126,7 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
         if (mounted) {
           setState(() {
             _receivedImages = files.length;
-            if (files.isNotEmpty) {
-              files.sort((a, b) => b.path.compareTo(a.path));
-              _lastImagePath = files.first.path;
-            }
           });
-        }
-      }
-    } catch (_) {}
-  }
-
-  Future<void> _loadLatestImage() async {
-    try {
-      final directory = await getApplicationDocumentsDirectory();
-      final imagesDir = Directory('${directory.path}/esp32_images');
-
-      if (await imagesDir.exists()) {
-        final files = imagesDir
-            .listSync()
-            .whereType<File>()
-            .where((f) => f.path.endsWith('.jpg'))
-            .toList();
-
-        if (files.isNotEmpty) {
-          files.sort((a, b) => b.path.compareTo(a.path));
-          if (mounted) {
-            setState(() {
-              _lastImagePath = files.first.path;
-            });
-          }
         }
       }
     } catch (_) {}
@@ -174,7 +176,6 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
     } else if (data['event'] == 'image_received') {
       setState(() {
         _currentProgress = 0;
-        _lastImagePath = data['path'] ?? '';
       });
       _loadImageCount();
 
@@ -184,7 +185,11 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
             children: [
               Icon(Icons.check_circle, color: Colors.white),
               SizedBox(width: 12),
-              Text('Yeni resim kaydedildi ve Telegram\'a gönderildi!'),
+              Text(
+                _isTelegramEnabled
+                    ? 'Yeni resim kaydedildi ve Telegram\'a gönderildi!'
+                    : 'Yeni resim kaydedildi!',
+              ),
             ],
           ),
           backgroundColor: Colors.green,
@@ -223,10 +228,11 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
   }
 
   Future<void> _startServer() async {
-    if (_telegramChatId.isEmpty) {
+    // Only require Telegram Chat ID if Telegram is enabled
+    if (_isTelegramEnabled && _telegramChatId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('⚠️ Telegram Chat ID girilmedi!'),
+          content: Text('⚠️ Telegram etkinleştirildi ancak Chat ID girilmedi!'),
           backgroundColor: Colors.orange,
         ),
       );
@@ -245,6 +251,7 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
     );
 
     if (serviceStarted is ServiceRequestSuccess) {
+      await _prefs.saveServerRunning(true);
       setState(() {
         _isServerRunning = true;
       });
@@ -253,6 +260,7 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
 
   Future<void> _stopServer() async {
     await FlutterForegroundTask.stopService();
+    await _prefs.saveServerRunning(false);
     setState(() {
       _isServerRunning = false;
       _currentProgress = 0;
@@ -264,8 +272,8 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
     await Future.wait([
       _getIpAddress(),
       _loadImageCount(),
-      _loadLatestImage(),
       _loadTelegramChatId(),
+      _loadTelegramEnabled(),
       _checkServiceStatus(),
     ]);
 
@@ -292,7 +300,7 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
     return Scaffold(
       body: CustomScrollView(
         slivers: [
-          SliverAppBar.large(
+          SliverAppBar(
             title: Text('ESP32 Kamera'),
             actions: [
               IconButton(
@@ -313,29 +321,58 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
                           Text('Telegram Ayarları'),
                         ],
                       ),
-                      content: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Chat ID\'nizi öğrenmek için:',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          SizedBox(height: 8),
-                          Text('1. @userinfobot\'a mesaj gönderin'),
-                          Text('2. Gelen ID\'yi buraya girin'),
-                          SizedBox(height: 16),
-                          TextField(
-                            controller: _chatIdController,
-                            decoration: InputDecoration(
-                              labelText: 'Telegram Chat ID',
-                              hintText: '123456789',
-                              border: OutlineInputBorder(),
-                              prefixIcon: Icon(Icons.tag),
-                            ),
-                            keyboardType: TextInputType.number,
-                          ),
-                        ],
+                      content: StatefulBuilder(
+                        builder:
+                            (BuildContext context, StateSetter setDialogState) {
+                              return Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Chat ID\'nizi öğrenmek için:',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  SizedBox(height: 8),
+                                  Text('1. @userinfobot\'a mesaj gönderin'),
+                                  Text('2. Gelen ID\'yi buraya girin'),
+                                  SizedBox(height: 16),
+                                  SwitchListTile(
+                                    title: Text(
+                                      'Telegram Gönderimini Etkinleştir',
+                                    ),
+                                    subtitle: Text(
+                                      _isTelegramEnabled
+                                          ? 'Resimler Telegram\'a gönderilecek'
+                                          : 'Resimler sadece yerel olarak kaydedilecek',
+                                    ),
+                                    value: _isTelegramEnabled,
+                                    onChanged: (value) {
+                                      setState(() {
+                                        _isTelegramEnabled = value;
+                                      });
+                                      setDialogState(() {
+                                        _isTelegramEnabled = value;
+                                      });
+                                      _prefs.saveTelegramEnabled(value);
+                                    },
+                                  ),
+                                  Divider(),
+                                  SizedBox(height: 8),
+                                  TextField(
+                                    controller: _chatIdController,
+                                    decoration: InputDecoration(
+                                      labelText: 'Telegram Chat ID',
+                                      hintText: '123456789',
+                                      border: OutlineInputBorder(),
+                                      prefixIcon: Icon(Icons.tag),
+                                    ),
+                                    keyboardType: TextInputType.number,
+                                  ),
+                                ],
+                              );
+                            },
                       ),
                       actions: [
                         TextButton(
@@ -355,7 +392,18 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
                 },
               ),
               IconButton(
+                icon: Icon(Icons.live_tv),
+                tooltip: 'Canlı Görüntü',
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => LiveImagePage()),
+                  );
+                },
+              ),
+              IconButton(
                 icon: Icon(Icons.photo_library_outlined),
+                tooltip: 'Tüm Resimler',
                 onPressed: () {
                   Navigator.push(
                     context,
@@ -394,7 +442,9 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
                               children: [
                                 Text(
                                   _telegramChatId.isNotEmpty
-                                      ? 'Telegram Bağlı'
+                                      ? (_isTelegramEnabled
+                                            ? 'Telegram Aktif'
+                                            : 'Telegram Devre Dışı')
                                       : 'Telegram Bağlı Değil',
                                   style: TextStyle(
                                     fontWeight: FontWeight.bold,
@@ -403,7 +453,9 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
                                 ),
                                 Text(
                                   _telegramChatId.isNotEmpty
-                                      ? 'Chat ID: $_telegramChatId'
+                                      ? (_isTelegramEnabled
+                                            ? 'Chat ID: $_telegramChatId'
+                                            : 'Gönderim kapalı')
                                       : 'Ayarlardan Chat ID girin',
                                   style: TextStyle(fontSize: 12),
                                 ),
@@ -443,7 +495,7 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
                                   _isServerRunning
                                       ? Icons.wifi
                                       : Icons.wifi_off,
-                                  size: 64,
+                                  size: 20,
                                   color: _isServerRunning
                                       ? Colors.green
                                       : Colors.grey,
@@ -455,7 +507,7 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
                           Text(
                             _isServerRunning ? 'SUNUCU AKTİF' : 'SUNUCU KAPALI',
                             style: TextStyle(
-                              fontSize: 24,
+                              fontSize: 15,
                               fontWeight: FontWeight.bold,
                               color: _isServerRunning
                                   ? Colors.green
@@ -473,54 +525,6 @@ class ServerPageState extends State<ServerPage> with TickerProviderStateMixin {
                             ),
                             SizedBox(height: 8),
                             Text('Alınıyor... %$_currentProgress'),
-                          ],
-                          if (_lastImagePath.isNotEmpty) ...[
-                            SizedBox(height: 16),
-                            Divider(),
-                            SizedBox(height: 8),
-                            Text(
-                              'Son Alınan Resim',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                            SizedBox(height: 8),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(12),
-                              child: GestureDetector(
-                                onTap: () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (context) => FullImagePage(
-                                        file: File(_lastImagePath),
-                                      ),
-                                    ),
-                                  );
-                                },
-                                child: Image.file(
-                                  File(_lastImagePath),
-                                  height: 200,
-                                  width: double.infinity,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stackTrace) {
-                                    return Container(
-                                      height: 200,
-                                      color: Colors.grey.withOpacity(0.2),
-                                      child: Icon(
-                                        Icons.broken_image,
-                                        size: 48,
-                                        color: Colors.grey,
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                            ),
                           ],
                         ],
                       ),
